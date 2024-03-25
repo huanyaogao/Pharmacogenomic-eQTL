@@ -1,0 +1,183 @@
+---
+title: "PGx-eQTL_AR"
+author: "HG"
+date: "March 20, 2024"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(GenomicRanges)
+knitr::opts_chunk$set(echo = TRUE)
+options(stringsAsFactors = F)
+```
+
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+Start eQTL analysis
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+```{r Matrix eQTL}
+rm(list = ls())
+PATH = gsub("//","/",paste0(dirname(rstudioapi::getSourceEditorContext()$path),"/"))
+source(paste0(PATH, "Functions.R"))
+
+
+  #BiocManager::install("MatrixEQTL")
+  
+  MatrixEqtl_wrapper(
+    Gene_Data=paste0(PATH,"/data/Exp_data_ARhigh.tsv"),
+    Gene_loc=paste0(PATH,"/data/Gene_loc.tsv"),
+    SNP_Data=paste0(PATH,"/data/SNP_data_ARhigh.tsv"),
+    SNP_loc=paste0(PATH,"/data/SNP_loc.tsv"),
+    Out_PATH=paste0(PATH,"/output/"),
+    Out_suffix="ARhigh",
+    cisDist = 2e5,
+    useModel = modelANOVA
+  )
+```
+
+```{r Plot GWAS-like results}
+rm(list = ls())
+PATH<-gsub("//","/",paste0(dirname(rstudioapi::getSourceEditorContext()$path),"/"))
+source(paste0(PATH, "Functions.R"))
+
+
+QQplot(eQTL_data = paste0(PATH,"/output/eQTL_All_ARhigh.RDS"),
+  Out_PATH=paste0(PATH,"/Plots"),
+  Out_suffix="ARhigh")
+     
+Manhattan_plot(eQTL_data = paste0(PATH,"/output/eQTL_All_ARhigh.RDS"),
+  Out_PATH=paste0(PATH,"/Plots"),
+  Out_suffix="ARhigh",
+  max_pvalue=0.1, sig_pvalue=0.005)
+
+
+```
+
+```{r Overlap ChIPseq and ChromHMM annotation}
+rm(list = ls())
+PATH<-gsub("//","/",paste0(dirname(rstudioapi::getSourceEditorContext()$path),"/"))
+
+library(GenomicRanges)
+eQTL_file<-paste0(PATH, "output/eQTL_all_ARhigh.RDS")
+Out_PATH<-paste0(PATH, "output/")
+
+hg19_seqinfo<-readRDS(paste0(PATH, "../../Refdata/hg19_seqinfo.RDS")) #Seqinfo(genome="hg19")
+
+eQTL <- readRDS(eQTL_file)
+eQTL$chr<-paste0("chr",eQTL$chr)
+eQTL_GR<-makeGRangesFromDataFrame(eQTL, seqinfo = hg19_seqinfo, seqnames.field = "chr", start.field = "snploc", end.field = "snploc", ignore.strand = T, keep.extra.columns = F)
+
+
+ChIP <- read.delim(paste0(PATH, "data/ChIP_data.tsv"), sep = "\t",stringsAsFactors = F)
+ChIP_GR<-makeGRangesFromDataFrame(ChIP, seqinfo = hg19_seqinfo,  ignore.strand = T, keep.extra.columns = F) 
+
+Olap<-findOverlaps(eQTL_GR, ChIP_GR)
+
+eQTL[,c("ChIP")] <- F
+eQTL[Olap@from,c("ChIP")] <- T
+
+eQTL[,c("ChIP_start","ChIP_end")]= NA
+eQTL[Olap@from,c("ChIP_start","ChIP_end")] <- ChIP[Olap@to,c("start","end")]
+
+
+
+CHM <- read.delim(sep="\t", stringsAsFactors = F,  paste0(PATH,  "data/snp_CHM_annotatation.tsv" ))  
+eQTL$CHM<-CHM$CHM[match(eQTL$snps,CHM$snps)]
+write.table(eQTL,sep="\t", row.names = F, paste0(Out_PATH, "eQTL_all_wAnnontation.tsv"))
+
+
+```
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+Find AR PGx-eQTL overlap with Breast Cancer GWAS
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+```{r Overlap with Breast GWAS}
+
+rm(list = ls())
+PATH<-gsub("//","/",paste0(dirname(rstudioapi::getSourceEditorContext()$path),"/"))
+source(paste0(PATH, "Functions.R"))
+token<-"7f0352063e9e"
+if(is.null(token)){
+  stop("Please input token for LDlink or request token from LDlink admin!")
+}
+
+              
+GWAS_Olap_wLD(GWAS_file=paste0(PATH, "data/GWAS_data.tsv"),
+              eQTL_file=paste0(PATH, "Output/eQTL_sig_ARhigh.tsv"), 
+              LD_PATH=paste0(PATH, "Output/LD/"),
+              GWAS_pcut=0.005,Extend_range=2e5,token_current=token,All_Pop="EUR",
+              genome_build_sel="grch37", API_segment_length=500,rm_temp_file=T,r2_threshold=0.8)
+  
+  
+  
+```
+
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+circos plot  and regional plot (locus zoom)
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+```{r Prepare data for Circos Plots}
+rm(list = ls())
+PATH=paste0(gsub("//", "/", dirname(rstudioapi::getSourceEditorContext()$path)),"/")
+source(paste0(PATH, "Functions.R"))
+Prepare_data_for_circosplot(
+  eQTL_file=paste0(PATH, "/Output/eQTL_all_wAnnontation.tsv"),
+  Loci_file=paste0(PATH, "Output/eQTL_sig_Olap_GWAS.tsv"),
+  SNP_data=paste0(PATH, "data/SNP_data_ARhigh.tsv"),
+  OUT_PATH=paste0(PATH, "Output/"),
+  cisDist=2e5
+)
+  
+  
+
+```
+
+```{r Regional plot (Locus zoom using customized functions)}
+
+rm(list=ls())
+PATH <- paste0(gsub("//","/",dirname(rstudioapi::getSourceEditorContext()$path)), "/")
+source(paste0(PATH, "Functions.R"))
+
+
+Regional_plot(eQTL_file=paste0(PATH,  "Output/eQTL_all_wCorr.tsv" ), 
+              Gene_annotation_file=paste0(PATH,  "data/Gene_loc.tsv"),
+              Exon_annotation_file=paste0(PATH,  "data/Exon_sub.tsv"),
+    cisDist=2e+05, yloc = -80, nameloc = -100, eQTL_size_scale=3.33)
+  
+  
+
+```
+
+```{r Plot Circos Plots again with all CHIPseq and ChromHMM peaks}
+rm(list = ls())
+PATH<-paste0(gsub("//", "/", dirname(rstudioapi::getSourceEditorContext()$path)),"/")
+source(paste0(PATH, "Functions.R"))
+
+
+
+Plot_circos(
+  eQTL_file=paste0(PATH,  "Output/eQTL_all_wCorr.tsv" ),
+  SNP_file=paste0(PATH, "data/SNP_data_ARhigh.tsv" ),
+  Exp_file=paste0(PATH, "data/Exp_data_ARhigh.tsv" ),
+  Plot_PATH=paste0(PATH, "Plots/"),
+  gene_name=T,
+  cisDist=2e+05,
+  CHM_extend=50,
+  CHIP_extend=100,
+  eps=F
+)
+
+
+```
